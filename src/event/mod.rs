@@ -117,12 +117,16 @@ pub enum Event {
     /// Vol 2, Part E, Section 7.7.65.12
     LePhyUpdateComplete(LePhyUpdateComplete),
 
+    /// Vol 4, Part E, Section 7.7.65.14 — which channel selection algorithm the
+    /// connection is using. The controller emits this for every connection, so
+    /// leaving it unparsed makes every connection produce a dropped HCI packet.
+    LeChannelSelectionAlgorithm(LeChannelSelectionAlgorithm),
+
     // TODO: le_directed_advertising_report
     // TODO: le_extended_advertising_report
     // TODO: le_scan_timeout
     // TODO: le_advertising_set_terminated
     // TODO: le_scan_request_received
-    // TODO: le_channel_selection_algorithm
     /// Vol 4, Part E, Section 7.7.65.21 — IQ samples from a CTE-bearing packet.
     LeConnectionIqReport(LeConnectionIqReport),
 
@@ -192,6 +196,11 @@ pub enum Error {
     /// [LE Advertising Report](Event::LeAdvertisingReport) events: The address type was not recognized.
     /// Includes the unrecognized byte.
     BadLeAddressType(u8),
+
+    /// For the [LE Channel Selection Algorithm](Event::LeChannelSelectionAlgorithm)
+    /// event: the channel selection algorithm value was not recognized.
+    /// Includes the unrecognized byte.
+    BadChannelSelectionAlgorithm(u8),
 
     /// For the [LE Connection Complete](Event::LeConnectionComplete) event: The returned connection
     /// interval was invalid. Includes the error returned when attempting to create the
@@ -349,6 +358,9 @@ fn to_le_meta_event(payload: &[u8]) -> Result<Event, Error> {
         0x0C => Ok(Event::LePhyUpdateComplete(to_le_phy_update_complete(
             payload,
         )?)),
+        0x14 => Ok(Event::LeChannelSelectionAlgorithm(
+            to_le_channel_selection_algorithm(payload)?,
+        )),
         0x15 => Ok(Event::LeConnectionIqReport(to_le_connection_iq_report(
             payload,
         )?)),
@@ -1302,6 +1314,56 @@ fn to_le_data_length_change_event(payload: &[u8]) -> Result<LeDataLengthChangeEv
 
         max_rx_octets: LittleEndian::read_u16(&payload[7..]),
         max_rx_time: LittleEndian::read_u16(&payload[9..]),
+    })
+}
+
+/// The [Channel Selection Algorithm](Event::LeChannelSelectionAlgorithm) event
+/// indicates which channel selection algorithm the controller is using on a
+/// connection.
+///
+/// Defined in Vol 4, Part E, Section 7.7.65.14 of the spec.
+#[derive(Copy, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct LeChannelSelectionAlgorithm {
+    /// Identifies the connection this event refers to.
+    pub conn_handle: ConnectionHandle,
+    /// The channel selection algorithm in use on the connection.
+    pub channel_selection_algorithm: ChannelSelectionAlgorithm,
+}
+
+/// Channel selection algorithm used on a connection.
+///
+/// See Vol 6, Part B, Section 4.5.8.2 of the spec.
+#[derive(Copy, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum ChannelSelectionAlgorithm {
+    /// Algorithm #1, used by Bluetooth 4.0/4.2 controllers.
+    Csa1,
+    /// Algorithm #2, mandated for Bluetooth 5.0 and later controllers.
+    Csa2,
+}
+
+impl TryFrom<u8> for ChannelSelectionAlgorithm {
+    type Error = Error;
+
+    fn try_from(value: u8) -> Result<ChannelSelectionAlgorithm, Self::Error> {
+        match value {
+            0x00 => Ok(ChannelSelectionAlgorithm::Csa1),
+            0x01 => Ok(ChannelSelectionAlgorithm::Csa2),
+            _ => Err(Error::BadChannelSelectionAlgorithm(value)),
+        }
+    }
+}
+
+fn to_le_channel_selection_algorithm(
+    payload: &[u8],
+) -> Result<LeChannelSelectionAlgorithm, Error> {
+    // Subevent_Code(1) + Connection_Handle(2) + Channel_Selection_Algorithm(1)
+    require_len!(payload, 4);
+
+    Ok(LeChannelSelectionAlgorithm {
+        conn_handle: ConnectionHandle(LittleEndian::read_u16(&payload[1..])),
+        channel_selection_algorithm: ChannelSelectionAlgorithm::try_from(payload[3])?,
     })
 }
 
